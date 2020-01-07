@@ -4,7 +4,7 @@
 ### Database 
 > [Hadoop==2.7.7](https://mirrors.tuna.tsinghua.edu.cn/apache/hadoop/common/hadoop-2.7.7/) (Java jdk 1.8 is necessary)
 
-#### Manage distributed data with Hadoop(hdfs) 
+#### Manage distributed data with Hadoop Distributed File System(HDFS) 
 
 ### Programming environment
 > python==3.6\
@@ -24,13 +24,28 @@
 > The model of GCN based on sampling
 
 ### hdfs_upload.py
-> Easily generate graph with json format and upload to hdfs in parameter server
+> Easily to generate graph with JSON format and upload to HDFS in parameter server
 
 ### walks.py
 > To generate random walks for Deepwalk and computing graphs to GCN
 
 ### module.py
 > The other functions: similarity computing, link prediction, node classification, negative sampling, generate training data and testing data
+
+## Graph Format
+> {\
+>  &emsp;"source_0":\
+>  &emsp;&emsp;{\
+>  &emsp;&emsp;&emsp;"label":[node_label]\
+>  &emsp;&emsp;&emsp;"edge":[target_0, target_1,...]\
+> &emsp;&emsp;}\
+> &emsp;&emsp;...\
+&emsp;"source_N":\
+>  &emsp;&emsp;{\
+>  &emsp;&emsp;&emsp;"label":[node_label]\
+>  &emsp;&emsp;&emsp;"edge":[target_0, target_1,...]\
+> &emsp;&emsp;}\
+> }
 
 ## Easy To Run
 ### In the parameter server (ps)
