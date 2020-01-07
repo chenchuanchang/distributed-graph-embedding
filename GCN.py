@@ -22,7 +22,7 @@ flags.DEFINE_float('semi_size', 0.8, 'Testing batch size ')
 flags.DEFINE_float('lr', 0.001, 'Learning rate')
 
 # 定义aggregate参数
-flags.DEFINE_integer('k', 5, 'The aggregated neighbors for each node')
+flags.DEFINE_integer('k', 10, 'The aggregated neighbors for each node')
 
 # 定义分布式参数
 flags.DEFINE_integer('worker', None, 'The number of worker')
@@ -32,7 +32,7 @@ cluster_dic = {
     "worker": [
         "10.76.3.92:2223", # worker节点地址：端口
         "10.76.3.110:2224",
-        "10.76.3.89:2225",
+        # "10.76.3.89:2225",
     ],
     "ps": [
         "10.76.3.92:2222"  # ps节点地址：端口
