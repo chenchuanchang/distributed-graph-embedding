@@ -22,7 +22,7 @@ flags.DEFINE_float('semi_size', 0.8, 'Testing batch size ')
 flags.DEFINE_float('lr', 0.001, 'Learning rate')
 
 # 定义aggregate参数
-flags.DEFINE_integer('k', 10, 'The aggregated neighbors for each node')
+flags.DEFINE_integer('k', 2, 'The aggregated neighbors for each node')
 
 # 定义分布式参数
 flags.DEFINE_integer('worker', None, 'The number of worker')
@@ -31,7 +31,7 @@ flags.DEFINE_integer('worker', None, 'The number of worker')
 cluster_dic = {
     "worker": [
         "10.76.3.92:2223", # worker节点地址：端口
-        "10.76.3.110:2224",
+        "10.76.3.92:2224",
         # "10.76.3.89:2225",
     ],
     "ps": [
@@ -56,7 +56,7 @@ def main(args):
     FLAGS.node_num = len(G.keys()) - 1
 
     # FLAGS.train_steps = FLAGS.node_num//FLAGS.batch_size*20
-    # FLAGS.train_steps = 2
+    FLAGS.train_steps = 4
     is_chief = (FLAGS.task == 0)
 
     if FLAGS.job == 'ps':
@@ -64,7 +64,6 @@ def main(args):
 
     with tf.device(tf.train.replica_device_setter(cluster=cluster)):
         global_step = tf.Variable(0, name='global_step', trainable=False)  # 创建纪录全局训练步数变量
-
         emb_init = (np.random.randn(FLAGS.node_num, FLAGS.dim) / np.sqrt(FLAGS.node_num / 2)).astype('float32')
         W_init = (np.random.randn(FLAGS.dim, FLAGS.labels) / np.sqrt(FLAGS.dim / 2)).astype('float32')
         emb = tf.Variable(emb_init, name='emb', trainable=True) # 创建embedding向量并且初始化
@@ -97,67 +96,59 @@ def main(args):
 
         f1_score = tf.py_func(node_classification, [x, x_label, y, y_label, emb], tf.double, stateful=True)
 
-        init_op = tf.global_variables_initializer()# 参数初始化
-        sv = tf.train.Supervisor(is_chief=is_chief, init_op=init_op, recovery_wait_secs=1,
-                                 global_step=global_step)
+        with tf.train.MonitoredTrainingSession(master=server.target,
+                                               is_chief=is_chief,
+                                               #hooks=[tf.train.StopAtStepHook(last_step=FLAGS.train_steps),
+                                               #       tf.train.NanTensorHook(loss)],
+                                               # checkpoint_dir="./checkpoint_dir",
+                                               save_checkpoint_steps=100) as sess:
+            time_begin = time.time()
+            print('Traing begins @ %f' % time_begin)
 
-        if is_chief:
-            print('Worker %d: Initailizing session...' % FLAGS.task)
-        else:
-            print('Worker %d: Waiting for session to be initaialized...' % FLAGS.task)
+            local_step = 0
+            step = 0
+            dx, dx_label, dy, dy_label = testing_data(FLAGS, G)
+            while not sess.should_stop() and step <= FLAGS.train_steps:
+                dxa, dxs, dys = traning_data(FLAGS, G, local_step)
+                train_feed = {
+                    xa:dxa,
+                    xs:dxs,
+                    ys:dys
+                }
+                _, step, _loss = sess.run([train_op, global_step, loss], feed_dict=train_feed)
+                local_step += 1
 
-        # 同步开始
-        sess = sv.prepare_or_wait_for_session(server.target)
-        print('Worker %d: Session initialization  complete.' % FLAGS.task)
+                now = time.time()
+                print('%f: Worker %d: traing step %d dome (global step:%d/%d), and loss : %f' % (now, FLAGS.task, local_step-1, step, FLAGS.train_steps, _loss))
 
-        time_begin = time.time()
-        print('Traing begins @ %f' % time_begin)
+                if local_step%10==0 and local_step!=0:
+                    f1_ = sess.run([f1_score], feed_dict={
+                        x: dx,
+                        x_label: dx_label,
+                        y: dy,
+                        y_label: dy_label
+                    })[0]
+                    print("Node classification macro-f1 is %.2f, micro-f1 is %.2lf" % (f1_[0], f1_[1]))
 
-        local_step = 0
-        step = 0
-        dx, dx_label, dy, dy_label = testing_data(FLAGS, G)
-        while not sv.should_stop() and step <= FLAGS.train_steps:
-            dxa, dxs, dys = traning_data(FLAGS, G, local_step)
-            train_feed = {
-                xa:dxa,
-                xs:dxs,
-                ys:dys
-            }
-            _, step, _loss = sess.run([train_op, global_step, loss], feed_dict=train_feed)
-            local_step += 1
+                if step >= FLAGS.train_steps:
+                    break
+            f1_ = sess.run([f1_score], feed_dict={
+                x:dx,
+                x_label:dx_label,
+                y:dy,
+                y_label:dy_label
+            })[0]
+            print("Node classification macro-f1 is %.2f, micro-f1 is %.2lf" % (f1_[0], f1_[1]))
+            time_end = time.time()
+            print('Training ends @ %f' % time_end)
+            train_time = time_end - time_begin
+            print('Training elapsed time:%f s' % train_time)
 
-            now = time.time()
-            print('%f: Worker %d: traing step %d dome (global step:%d/%d), and loss : %f' % (now, FLAGS.task, local_step-1, step, FLAGS.train_steps, _loss))
-
-            if local_step%10==0 and local_step!=0:
-                f1_ = sess.run([f1_score], feed_dict={
-                    x: dx,
-                    x_label: dx_label,
-                    y: dy,
-                    y_label: dy_label
-                })[0]
-                print("Node classification macro-f1 is %.2f, micro-f1 is %.2lf" % (f1_[0], f1_[1]))
-
-            if step >= FLAGS.train_steps:
-                break
-        f1_ = sess.run([f1_score], feed_dict={
-            x:dx,
-            x_label:dx_label,
-            y:dy,
-            y_label:dy_label
-        })[0]
-        print("Node classification macro-f1 is %.2f, micro-f1 is %.2lf" % (f1_[0], f1_[1]))
-        time_end = time.time()
-        print('Training ends @ %f' % time_end)
-        train_time = time_end - time_begin
-        print('Training elapsed time:%f s' % train_time)
-
-        sleep_time = 0
-        while sleep_time < 5:
-            time.sleep(2)
-            sleep_time += 1
-            print("Waiting other machines...")
-    sess.close()
+            sleep_time = 0
+            while sleep_time < 5:
+                time.sleep(2)
+                sleep_time += 1
+                print("Waiting other machines...")
 
 if __name__ == '__main__':
     tf.app.run()

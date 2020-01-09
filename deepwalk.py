@@ -33,8 +33,8 @@ flags.DEFINE_integer('worker', None, 'The number of worker')
 cluster_dic = {
     "worker": [
         "10.76.3.92:2223", # worker节点地址：端口
-        "10.76.3.110:2224",
-        "10.76.3.89:2225",
+        "10.76.3.92:2224",
+        # "10.76.3.89:2225",
     ],
     "ps": [
         "10.76.3.92:2222"  # ps节点地址：端口
@@ -57,8 +57,8 @@ def main(args):
     FLAGS.worker = len(cluster_dic['worker'])
     FLAGS.node_num = len(G.keys()) - 1
 
-    FLAGS.train_steps = FLAGS.node_num//FLAGS.batch_size*20
-    # FLAGS.train_steps = 10
+    # FLAGS.train_steps = FLAGS.node_num//FLAGS.batch_size*20
+    FLAGS.train_steps = 4
     is_chief = (FLAGS.task == 0)
 
     if FLAGS.job == 'ps':
@@ -66,7 +66,6 @@ def main(args):
 
     with tf.device(tf.train.replica_device_setter(cluster=cluster)):
         global_step = tf.Variable(0, name='global_step', trainable=False)  # 创建纪录全局训练步数变量
-
         emb_init = (np.random.randn(FLAGS.node_num, FLAGS.dim) / np.sqrt(FLAGS.node_num / 2)).astype('float32')
         emb = tf.Variable(emb_init, name='emb', trainable=True) # 创建embedding向量并且初始化
 
@@ -75,6 +74,7 @@ def main(args):
 
         # 训练参数占位符
         pos = (FLAGS.w-2*FLAGS.cs)*2*FLAGS.cs
+
         xc_0 = tf.placeholder(dtype=tf.int32, shape=(pos * FLAGS.batch_size))# 正边 source
         xc_1 = tf.placeholder(dtype=tf.int32, shape=(pos * FLAGS.batch_size))# 正边 target
         xuc_0 = tf.placeholder(dtype=tf.int32, shape=(pos * FLAGS.ns * FLAGS.batch_size))# 无边 source
@@ -103,64 +103,57 @@ def main(args):
 
         AUC = tf.py_func(link_prediction, [val, emb], tf.double, stateful=True)
 
-        init_op = tf.global_variables_initializer()# 参数初始化
-        sv = tf.train.Supervisor(is_chief=is_chief, init_op=init_op, recovery_wait_secs=1,
-                                 global_step=global_step)
+        # init_op = tf.global_variables_initializer()# 参数初始化
+        with tf.train.MonitoredTrainingSession(master=server.target,
+                                               is_chief=is_chief,
+                                              # hooks=[tf.train.StopAtStepHook(last_step=FLAGS.train_steps),
+                                              #                 tf.train.NanTensorHook(loss)],
+                                              #  checkpoint_dir="./checkpoint_dir",
+                                               save_checkpoint_steps=100) as sess:
+            time_begin = time.time()
+            print('Traing begins @ %f' % time_begin)
 
-        if is_chief:
-            print('Worker %d: Initailizing session...' % FLAGS.task)
-        else:
-            print('Worker %d: Waiting for session to be initaialized...' % FLAGS.task)
+            local_step = 0
+            step = 0
 
-        # 同步开始
-        sess = sv.prepare_or_wait_for_session(server.target)
-        print('Worker %d: Session initialization  complete.' % FLAGS.task)
-
-        time_begin = time.time()
-        print('Traing begins @ %f' % time_begin)
-
-        local_step = 0
-        step = 0
-
-        dval = testing_data(FLAGS, G)
-        val_feed = {
-            val: dval
-        }
-        while not sv.should_stop() and step <= FLAGS.train_steps:
-            dxc_0, dxc_1, dxuc_0, dxuc_1 = traning_data(FLAGS, G, local_step)
-            train_feed = {
-                xc_0:dxc_0,
-                xc_1:dxc_1,
-                xuc_0:dxuc_0,
-                xuc_1:dxuc_1
+            dval = testing_data(FLAGS, G)
+            val_feed = {
+                val: dval
             }
+            while not sess.should_stop() and step <= FLAGS.train_steps:
+                dxc_0, dxc_1, dxuc_0, dxuc_1 = traning_data(FLAGS, G, local_step)
+                train_feed = {
+                    xc_0:dxc_0,
+                    xc_1:dxc_1,
+                    xuc_0:dxuc_0,
+                    xuc_1:dxuc_1
+                }
 
-            _, step, _loss = sess.run([train_op, global_step, loss], feed_dict=train_feed)
-            local_step += 1
+                _, step, _loss = sess.run([train_op, global_step, loss], feed_dict=train_feed)
+                local_step += 1
 
-            now = time.time()
-            print('%f: Worker %d: traing step %d dome (global step:%d/%d), and loss : %f' % (now, FLAGS.task, local_step-1, step, FLAGS.train_steps, _loss))
+                now = time.time()
+                print('%f: Worker %d: traing step %d dome (global step:%d/%d), and loss : %f' % (now, FLAGS.task, local_step-1, step, FLAGS.train_steps, _loss))
 
-            if local_step%10==0 and local_step!=0:
-                auc = sess.run([AUC], feed_dict=val_feed)
-                print("Link prediction AUC is %.2f" % auc[0])
+                if local_step%10==0 and local_step!=0:
+                    auc = sess.run([AUC], feed_dict=val_feed)
+                    print("Link prediction AUC is %.2f" % auc[0])
 
-            if step >= FLAGS.train_steps:
-                break
+                if step >= FLAGS.train_steps:
+                    break
 
-        auc = sess.run([AUC], feed_dict = val_feed)
-        print("Link prediction AUC is %.2f" % auc[0])
-        time_end = time.time()
-        print('Training ends @ %f' % time_end)
-        train_time = time_end - time_begin
-        print('Training elapsed time:%f s' % train_time)
+            auc = sess.run([AUC], feed_dict = val_feed)
+            print("Link prediction AUC is %.2f" % auc[0])
+            time_end = time.time()
+            print('Training ends @ %f' % time_end)
+            train_time = time_end - time_begin
+            print('Training elapsed time:%f s' % train_time)
 
-        sleep_time = 0
-        while sleep_time < 5:
-            time.sleep(2)
-            sleep_time += 1
-            print("Waiting other machines...")
-    sess.close()
+            sleep_time = 0
+            while sleep_time < 5:
+                time.sleep(2)
+                sleep_time += 1
+                print("Waiting other machines...")
 
 if __name__ == '__main__':
     tf.app.run()
